@@ -48,7 +48,7 @@ func requestRide(ctx context.Context, serviceName string, resultCh chan string) 
 			return
 		default:
 			if rand.Float64() > 0.75 {
-				//
+				// mock
 				resultCh <- serviceName
 				return
 			}

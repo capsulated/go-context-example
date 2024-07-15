@@ -2,31 +2,79 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
+	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
-func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+const (
+	listenAddr      = "127.0.0.1:8080"
+	shutdownTimeout = 5 * time.Second
+)
 
-	doWork(ctx)
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := runServer(ctx); err != nil {
+		log.Fatal(err)
+	}
 }
 
-func doWork(ctx context.Context) {
-	newCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+func runServer(ctx context.Context) error {
+	var (
+		mux = http.NewServeMux()
+		srv = &http.Server{
+			Addr:    listenAddr,
+			Handler: mux,
+		}
+	)
+
+	mux.Handle("/", handleIndex())
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("listen and serve: %v", err)
+		}
+	}()
+
+	log.Printf("listening on %s", listenAddr)
+	<-ctx.Done()
+
+	// Завершение программы
+	log.Println("shutting down server gracefully")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	log.Println("starting working...")
-
-	for {
-		select {
-		case <-newCtx.Done():
-			log.Printf("ctx done: %v", ctx.Err())
-			return
-		default:
-			log.Println("working...")
-			time.Sleep(1 * time.Second)
-		}
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("shutdown: %w", err)
 	}
+
+	// Симуляция долгого завершения
+	longShutdown := make(chan struct{}, 1)
+	go func() {
+		time.Sleep(3 * time.Second)
+		longShutdown <- struct{}{}
+	}()
+
+	select {
+	case <-shutdownCtx.Done():
+		return fmt.Errorf("server shutdown: %w", ctx.Err())
+	case <-longShutdown:
+		log.Println("finished")
+	}
+
+	return nil
+}
+
+func handleIndex() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Hello, World!"))
+	})
 }
